@@ -1,0 +1,15 @@
+version: '2'
+
+services:
+
+  # Sample Agent
+  cartpole-sota:
+    # The volume we mount determines which config files will be available to the services.
+    volumes:
+      - ./configs/demo:/aiq-sail-on/config:rw
+      - ./logs:/aiq-sail-on/logs:rw
+    build:
+      context: .
+      dockerfile: Dockerfile-SOTA-agent
+    command: python -u SOTA-cartpole.py --config=config/demo-cartpole.config --printout --logfile=logs/log.txt
+

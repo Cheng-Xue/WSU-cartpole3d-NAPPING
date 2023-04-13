@@ -1,0 +1,13 @@
+FROM python:3.8
+
+# Install pip libraries
+ADD requirements.txt requirements.txt
+RUN pip install -r requirements.txt
+
+# Load objects library.
+ADD source/objects /aiq-sail-on/objects/
+
+ADD source/* /aiq-sail-on/
+
+# Change local dir
+WORKDIR /aiq-sail-on/
