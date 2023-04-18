@@ -1,6 +1,0 @@
-python-dateutil==2.8.1
-psutil==5.7.2
-blosc==1.10.4
-stable-baselines3==1.1.0
-pika==1.1.0
-scipy==1.7.0

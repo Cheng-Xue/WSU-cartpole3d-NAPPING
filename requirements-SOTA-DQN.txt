@@ -1,0 +1,17 @@
+python-dateutil==2.8.1
+pytz
+psutil==5.7.2
+pika==1.1.0
+tensorflow==1.14.0
+tensorflow-gpu==1.14.0
+keras==2.2.4
+keras-rl==0.4.2
+joblib
+scikit-learn
+
+h5py==2.10.0
+blosc==1.10.4
+numpy
+torch
+
+protobuf==3.18.0

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ************************************************************************************************ #
 # **                                                                                            ** #
-# **    AIQ-SAIL-ON TA2 Agent Example                                                           ** #
+# **    AIQ-SAIL-ON SOTA Agent Example                                                          ** #
 # **                                                                                            ** #
 # **        Brian L Thomas, 2020                                                                ** #
 # **                                                                                            ** #
@@ -20,58 +20,47 @@
 # **  Contact: Diane J. Cook (djcook@wsu.edu)                                                   ** #
 # ************************************************************************************************ #
 
-import copy
+
+from sota_util.cartpole.cartpole_agent import Simple
 import optparse
-import queue
 import random
-import threading
 import time
+from importlib.util import spec_from_file_location, module_from_spec
 
 from objects.TA2_logic import TA2Logic
-from stable_baselines3 import PPO, DQN
 import numpy as np
 import math
 
-from importlib.util import spec_from_file_location, module_from_spec
+def euler_from_quaternion(x, y, z, w):
+    """
+    Convert a quaternion into euler angles (roll, pitch, yaw)
+    roll is rotation around x in radians (counterclockwise)
+    pitch is rotation around y in radians (counterclockwise)
+    yaw is rotation around z in radians (counterclockwise)
+    """
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = math.atan2(t0, t1)
 
+    t2 = +2.0 * (w * y - z * x)
+    t2 = +1.0 if t2 > +1.0 else t2
+    t2 = -1.0 if t2 < -1.0 else t2
+    pitch_y = math.asin(t2)
 
-class ThreadedProcessingExample(threading.Thread):
-    def __init__(self, processing_object: list, response_queue: queue.Queue):
-        threading.Thread.__init__(self)
-        self.processing_object = processing_object
-        self.response_queue = response_queue
-        self.is_done = False
-        return
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = math.atan2(t3, t4)
 
-    def run(self):
-        """All work tasks should happen or be called from within this function.
-        """
-        is_novel = False
-        message = ''
-
-        # Do some fake work here.
-        for work in self.processing_object:
-            sum = 0
-            for i in range(work):
-                sum += i
-            message += 'Did sum of {}. '.format(work)
-
-        self.response_queue.put((is_novel, message))
-        return
-
-    def stop(self):
-        self.is_done = True
-        return
-
+    return roll_x, pitch_y, yaw_z  # in radians
 
 class TA2Agent(TA2Logic):
     def __init__(self):
         super().__init__()
 
-        self.possible_answers = list()
         # This variable can be set to true and the system will attempt to end training at the
         # completion of the current episode, or sooner if possible.
         self.end_training_early = True
+
         # This variable is checked only during the evaluation phase.  If set to True the system
         # will attempt to cleanly end the experiment at the conclusion of the current episode,
         # or sooner if possible.
@@ -81,11 +70,12 @@ class TA2Agent(TA2Logic):
         # here.  Set custom options in the _add_ta2_command_line_options() function.
         options = self._get_command_line_options()
         my_custom_value = options.custom_value
-        self.model = PPO.load("./PPO_cartpole3d_allwalls")
-        self.action_dict = {0: 'nothing', 1: 'right', 2: 'left',  3: 'forward', 4: 'backward'}
         self.log.debug('Command line custom value is: {}'.format(my_custom_value))
+        self.action_dict = {0: 'nothing', 1: 'right', 2: 'left',  3: 'forward', 4: 'backward'}
+        self.action_space = ['nothing', 'right', 'left', 'forward', 'backward']
         self.performance_recording = {}
         self.trial_number = 0
+        self.agent = None
 
         return
 
@@ -118,6 +108,7 @@ class TA2Agent(TA2Logic):
         the experiment.
         """
         self.log.info('Experiment Start')
+        self.agent = Simple()
         return
 
     def training_start(self):
@@ -161,10 +152,8 @@ class TA2Agent(TA2Logic):
         """
         self.log.debug('Training Instance: feature_vector={}  feature_label={}'.format(
             feature_vector, feature_label))
-        if feature_label not in self.possible_answers:
-            self.possible_answers.append(copy.deepcopy(feature_label))
 
-        label_prediction = random.choice(self.possible_answers)
+        label_prediction = self.agent.predict(feature_vector)
 
         return label_prediction
 
@@ -227,7 +216,9 @@ class TA2Agent(TA2Logic):
 
         # Simulate training the model by sleeping.
         self.log.info('Simulating training with a 5 second sleep.')
+
         time.sleep(5)
+        self.agent = Simple()
 
         return
 
@@ -251,6 +242,15 @@ class TA2Agent(TA2Logic):
             The filename where the model was stored.
         """
         self.log.info('Load model from disk.')
+        del self.agent
+        self.agent = Simple()
+        spec = spec_from_file_location("NAPPING", "NAPPING.pyc")
+        NAPPING = module_from_spec(spec)
+        spec.loader.exec_module(NAPPING)
+        self.AdaptationPrinciple = NAPPING.AdaptationPrinciple
+        self.napping = self.AdaptationPrinciple(action_space=self.action_space, model=self.agent,
+                                           eval=self.AdaptationPrinciple.eval)
+
         return
 
     def trial_start(self, trial_number: int, novelty_description: dict):
@@ -268,13 +268,16 @@ class TA2Agent(TA2Logic):
         self.log.info('Trial Start: #{}  novelty_desc: {}'.format(trial_number,
                                                                   str(novelty_description)))
         self.trial_result = []
-        
-        spec = spec_from_file_location("NAPPING", "NAPPING.pyc")
-        NAPPING = module_from_spec(spec)
-        spec.loader.exec_module(NAPPING)
-        self.AdaptationPrinciple = NAPPING.AdaptationPrinciple
-        self.napping = self.AdaptationPrinciple(action_space=[0, 1, 2, 3, 4], model=self.model,
-                                           eval=self.AdaptationPrinciple.eval)
+        #
+        # spec = spec_from_file_location("NAPPING", "NAPPING.pyc")
+        # NAPPING = module_from_spec(spec)
+        # spec.loader.exec_module(NAPPING)
+
+        self.current_np_states = []
+        self.next_np_states = []
+        self.actions = []
+        self.rewards = []
+        self.if_done = []
 
         return
 
@@ -295,46 +298,14 @@ class TA2Agent(TA2Logic):
             This is the 0-based episode number in the current trial.
         """
         self.log.info('Testing Episode Start: #{}'.format(episode_number))
-
-        # Throw something together to create work.
-        # work_list = list([5000])
-        # for i in range(3 + episode_number):
-        #     work_list.append(50000)
-        # response_queue = queue.Queue()
-        # response = None
-        # # Initialize the example of doing work safely outside the main thread.
-        # # Remember, in Python all objects beyond int, float, bool, and str are passed
-        # # by reference.
-        # threaded_work = ThreadedProcessingExample(processing_object=work_list,
-        #                                           response_queue=response_queue)
-        # # Start the work in a separate thread.
-        # threaded_work.start()
-        #
-        # while response is None:
-        #     try:
-        #         # Try to get the response from the queue for 5 seconds before we let the AMQP
-        #         # network event loop do any required work (such as sending heartbeats) for
-        #         # 0.5 seconds.  By having the get(block=True) we ensure that there is basically
-        #         # no wait for the result once it is put in the queue.
-        #         response = response_queue.get(block=True, timeout=5)
-        #     except queue.Empty:
-        #         # Process any amqp events for 0.5 seconds before we try to get the results again.
-        #         self.process_amqp_events()
-        #
-        # # Safely end and clean up the threaded work object.
-        # threaded_work.stop()
-        # threaded_work.join()
-        #
-        # self.log.info('message from threaded work: {}'.format(response[1]))
-        # self.log.warning('Please remove this sample threaded work object from '
-        #                  'testing_episode_start() before running actual experiments.')
         self.np_state = None
         self.pre_np_state = None
         self.old_action = None
         self.action = None
         self.last_zv = None
         self.current_zv = None
-        self.novelty_indicator = False
+        self.tick = 0
+        self.reward = 0
         return
 
     def testing_instance(self, feature_vector: dict, novelty_indicator: bool = None) -> dict:
@@ -358,34 +329,52 @@ class TA2Agent(TA2Logic):
             A dictionary of your label prediction of the format {'action': label}.  This is
                 strictly enforced and the incorrect format will result in an exception being thrown.
         """
-        # self.log.debug('Testing Instance: feature_vector={}, novelty_indicator={}'.format(
-        #     feature_vector, novelty_indicator))
-        # Return dummy random choices, but should be determined by trained model
-        # label_prediction = random.choice(self.possible_answers)
-        # return only 1 blocks that are nearest to the cart
+        self.log.debug('Testing Instance: feature_vector={}, novelty_indicator={}'.format(
+            feature_vector, novelty_indicator))
 
-        np_state = self.AdaptationPrinciple.process_featvec(feature_vector)
-        v = np_state[10:12]
-        #roll_x, pitch_y, yaw_z = euler_from_quaternion(x,y,z,w)
-        zv = v
+        self.tick += 1
+        self.reward = self.tick/200
+        # if self.pre_np_state is not None:
+        #     self.current_np_states.append(self.pre_np_state)
+        #     self.next_np_states.append(feature_vector)
+        #     self.actions.append(self.pre_action)
+        #     self.rewards.append(self.reward)
+        #     self.if_done.append(False)
+
+        x_dot = feature_vector['pole']['x_velocity']
+        y_dot = feature_vector['pole']['y_velocity']
+        v = np.array([x_dot, y_dot])
+        x = feature_vector['pole']['x_quaternion']
+        y = feature_vector['pole']['y_quaternion']
+        z = feature_vector['pole']['z_quaternion']
+        w = feature_vector['pole']['w_quaternion']
+        roll_x, pitch_y, yaw_z = euler_from_quaternion(x,y,z,w)
+        zv = v + np.array([roll_x, pitch_y])
 
         past_result = self.trial_result
         if len(past_result) != 0:
-            if np.max(past_result[-5:]) <= 0.8 and len(past_result) >= 10:
+            if np.max(past_result[-10:]) <= 0.7 and len(past_result) >= 15:
                 self.novelty_indicator = True
 
         if self.novelty_indicator and self.last_zv is not None:
-            self.napping.update(self.pre_np_state, np_state, self.old_action, self.action,
+            self.napping.update(self.pre_np_state, None, self.old_action, self.action,
                                 last_zv=self.last_zv, current_zv=zv)
 
         if not self.novelty_indicator:
-            self.action = self.model.predict(np_state)[0] 
+            label_prediction = self.agent.predict(feature_vector)
         else:
-            #self.action = self.model.predict(np_state)[0]
-            self.old_action, self.action = self.napping.predict(np_state)
-            self.pre_np_state = np_state
+            #label_prediction = self.agent.predict(feature_vector)
+            self.old_action, self.action = self.napping.predict(feature_vector)
+            if 'action' not in self.old_action:
+                self.old_action = {'action':self.old_action}
+            if 'action' not in self.action:
+                self.action = {'action':self.action}
+            self.pre_np_state = feature_vector
+            self.pre_action = self.action
             self.last_zv = zv
-        label_prediction = {'action': self.action_dict[self.action.item() if not isinstance(self.action, int) else self.action]}
+            label_prediction = self.action
+
+        # Use simple agent to predict
 
         return label_prediction
 
@@ -400,6 +389,8 @@ class TA2Agent(TA2Logic):
             A dictionary that may provide additional feedback on your prediction based on the
             budget set in the TA1. If there is no feedback, the object will be None.
         """
+        self.log.debug('Testing Performance: {}'.format(performance))
+
         return
 
     def testing_episode_end(self, performance: float, feedback: dict = None) -> \
@@ -423,13 +414,30 @@ class TA2Agent(TA2Logic):
             A JSON-valid dict characterizing the novelty.
         """
         self.log.info('Testing Episode End: performance={}'.format(performance))
-        self.trial_result.append(performance)
         self.log.info(f'# of adaptation principles: {len(self.napping.adaptation_principle_mapping)}')
+
+        self.trial_result.append(performance)
+
         novelty_probability = 1 if self.novelty_indicator else 0
-        novelty_threshold = 0.5
+
+        novelty_threshold = 0.8
         novelty = random.choice(list(range(4)))
         novelty_characterization = dict()
-
+        # if self.pre_np_state is not None:
+        #     self.if_done[-1] = True
+        #     for i in range(len(self.if_done)):
+        #         obs = self.current_np_states[i]
+        #         next_obs = self.next_np_states[i]
+        #         action = self.actions[i]
+        #         reward = self.rewards[i]
+        #         done = self.if_done[i]
+        #         self.model.replay_buffer.add(obs, next_obs, action, reward, done, [{}])
+        #     if len(self.trial_result[5:]) % 3 == 0:
+        #         tmp_path = "/tmp/sb3_log/"
+        #         # set up logger
+        #         self.model.train(gradient_steps=self.model.replay_buffer.pos // 5, batch_size=64)
+        #         self.napping = self.AdaptationPrinciple(action_space=self.action_space, model=self.model,
+        #                                             eval=self.AdaptationPrinciple.eval)
         return novelty_probability, novelty_threshold, novelty, novelty_characterization
 
     def testing_end(self):
@@ -442,14 +450,23 @@ class TA2Agent(TA2Logic):
         """This is called at the end of each trial.
         """
         self.log.info('Trial End')
+        self.performance_recording[self.trial_number] = self.trial_result
         self.trial_number += 1
-
         return
 
     def experiment_end(self):
         """This is called when the experiment is done.
         """
         self.log.info('Experiment End')
+        for t in self.performance_recording:
+            if len(self.performance_recording[t]) != 0:
+                self.log.critical(
+                f"trial id: {t} pre-novelty performance: {np.average(self.performance_recording[t][:1])} post-novelty performance: {np.average(self.performance_recording[t][1:])}")
+        with open('all_records','w+') as f:
+            for key, values in self.performance_recording.items():
+                if len(values) != 0:
+                    for i, v in enumerate(values):
+            	        f.write(f"{key}, {i}, {v}\n")
         return
 
 

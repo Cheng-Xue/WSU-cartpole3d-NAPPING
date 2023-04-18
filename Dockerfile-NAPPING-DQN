@@ -1,0 +1,16 @@
+FROM python:3.7
+
+# Install pip libraries
+ADD requirements-SOTA-DQN.txt requirements.txt
+RUN pip install -r requirements.txt
+
+# Load objects library.
+ADD source/objects /aiq-sail-on/objects/
+
+# Load SOTA.py
+ADD source/sota_util /aiq-sail-on/sota_util/
+ADD source/SOTA-cartpole.py /aiq-sail-on/SOTA-cartpole.py
+ADD source/NAPPING.pyc /aiq-sail-on/NAPPING.pyc
+
+# Change local dir
+WORKDIR /aiq-sail-on/
