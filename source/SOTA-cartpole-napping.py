@@ -20,16 +20,16 @@
 # **  Contact: Diane J. Cook (djcook@wsu.edu)                                                   ** #
 # ************************************************************************************************ #
 
-
-from sota_util.cartpole.cartpole_agent import Simple
+import math
 import optparse
 import random
 import time
-from importlib.util import spec_from_file_location, module_from_spec
+
+import numpy as np
 
 from objects.TA2_logic import TA2Logic
-import numpy as np
-import math
+from sota_util.cartpole.cartpole_agent import Simple
+from importlib.util import spec_from_file_location, module_from_spec
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -53,6 +53,7 @@ def euler_from_quaternion(x, y, z, w):
 
     return roll_x, pitch_y, yaw_z  # in radians
 
+
 class TA2Agent(TA2Logic):
     def __init__(self):
         super().__init__()
@@ -71,7 +72,7 @@ class TA2Agent(TA2Logic):
         options = self._get_command_line_options()
         my_custom_value = options.custom_value
         self.log.debug('Command line custom value is: {}'.format(my_custom_value))
-        self.action_dict = {0: 'nothing', 1: 'right', 2: 'left',  3: 'forward', 4: 'backward'}
+        self.action_dict = {0: 'nothing', 1: 'right', 2: 'left', 3: 'forward', 4: 'backward'}
         self.action_space = ['nothing', 'right', 'left', 'forward', 'backward']
         self.performance_recording = {}
         self.trial_number = 0
@@ -109,6 +110,7 @@ class TA2Agent(TA2Logic):
         """
         self.log.info('Experiment Start')
         self.agent = Simple()
+        self.session = self.agent.default_session
         return
 
     def training_start(self):
@@ -218,7 +220,8 @@ class TA2Agent(TA2Logic):
         self.log.info('Simulating training with a 5 second sleep.')
 
         time.sleep(5)
-        self.agent = Simple()
+        with self.session.as_default():
+            self.agent = Simple()
 
         return
 
@@ -243,13 +246,14 @@ class TA2Agent(TA2Logic):
         """
         self.log.info('Load model from disk.')
         del self.agent
-        self.agent = Simple()
-        spec = spec_from_file_location("NAPPING", "NAPPING.pyc")
+        with self.session.as_default():
+            self.agent = Simple()
+        spec = spec_from_file_location("NAPPING", "NAPPING_K.pyc")
         NAPPING = module_from_spec(spec)
         spec.loader.exec_module(NAPPING)
-        self.AdaptationPrinciple = NAPPING.AdaptationPrinciple
-        self.napping = self.AdaptationPrinciple(action_space=self.action_space, model=self.agent,
-                                           eval=self.AdaptationPrinciple.eval)
+        self.AdaptationPrinciple = NAPPING
+        self.napping = self.AdaptationPrinciple.NAPPING(action_space=self.action_space, model=self.agent,
+                                                eval=self.AdaptationPrinciple.NAPPING.eval, eps=8)
 
         return
 
@@ -269,12 +273,10 @@ class TA2Agent(TA2Logic):
                                                                   str(novelty_description)))
         self.trial_result = []
         #
-        # spec = spec_from_file_location("NAPPING", "NAPPING.pyc")
-        # NAPPING = module_from_spec(spec)
-        # spec.loader.exec_module(NAPPING)
 
-        self.current_np_states = []
-        self.next_np_states = []
+
+        self.current_states = []
+        self.next_states = []
         self.actions = []
         self.rewards = []
         self.if_done = []
@@ -299,13 +301,21 @@ class TA2Agent(TA2Logic):
         """
         self.log.info('Testing Episode Start: #{}'.format(episode_number))
         self.np_state = None
-        self.pre_np_state = None
+        self.pre_state = None
         self.old_action = None
         self.action = None
         self.last_zv = None
         self.current_zv = None
         self.tick = 0
         self.reward = 0
+        self.last_x_dot = None
+        self.last_y_dot = None
+        self.last_p = None
+        self.last_cart_p = None
+        self.last_cart_v = None
+        self.last_block_p = None
+        self.last_block_v = None
+        self.if_avoid = False
         return
 
     def testing_instance(self, feature_vector: dict, novelty_indicator: bool = None) -> dict:
@@ -332,49 +342,98 @@ class TA2Agent(TA2Logic):
         self.log.debug('Testing Instance: feature_vector={}, novelty_indicator={}'.format(
             feature_vector, novelty_indicator))
 
-        self.tick += 1
-        self.reward = self.tick/200
-        # if self.pre_np_state is not None:
-        #     self.current_np_states.append(self.pre_np_state)
-        #     self.next_np_states.append(feature_vector)
-        #     self.actions.append(self.pre_action)
-        #     self.rewards.append(self.reward)
-        #     self.if_done.append(False)
+        block_p = []
+        block_v = []
+        for ind, obj in enumerate(feature_vector['blocks']):
+            x = obj['x_position']
+            y = obj['y_position']
+            z = obj['y_position']
+            xdot = obj['x_velocity']
+            ydot = obj['y_velocity']
+            zdot = obj['z_velocity']
+            block_p.append([x, y, z])
+            block_v.append([xdot, ydot, zdot])
+        block_p = np.array(block_p)
+        block_v = np.array(block_v)
 
-        x_dot = feature_vector['pole']['x_velocity']
-        y_dot = feature_vector['pole']['y_velocity']
-        v = np.array([x_dot, y_dot])
-        x = feature_vector['pole']['x_quaternion']
-        y = feature_vector['pole']['y_quaternion']
-        z = feature_vector['pole']['z_quaternion']
-        w = feature_vector['pole']['w_quaternion']
-        roll_x, pitch_y, yaw_z = euler_from_quaternion(x,y,z,w)
-        zv = v + np.array([roll_x, pitch_y])
+        with self.session.as_default():
+            x_cart_dot = feature_vector['cart']['x_velocity']
+            y_cart_dot = feature_vector['cart']['y_velocity']
+            z_cart_dot = feature_vector['cart']['z_velocity']
+            cart_v = np.array([x_cart_dot, y_cart_dot, z_cart_dot])
+            x_cart = feature_vector['cart']['x_position']
+            y_cart = feature_vector['cart']['y_position']
+            z_cart = feature_vector['cart']['z_position']
+            cart_p = np.array([x_cart, y_cart, z_cart])
 
-        past_result = self.trial_result
-        if len(past_result) != 0:
-            if np.max(past_result[-10:]) <= 0.7 and len(past_result) >= 15:
-                self.novelty_indicator = True
+            x_dot = feature_vector['pole']['x_velocity']
+            y_dot = feature_vector['pole']['y_velocity']
+            v = np.array([x_dot, y_dot])
+            x = feature_vector['pole']['x_quaternion']
+            y = feature_vector['pole']['y_quaternion']
+            z = feature_vector['pole']['z_quaternion']
+            w = feature_vector['pole']['w_quaternion']
 
-        if self.novelty_indicator and self.last_zv is not None:
-            self.napping.update(self.pre_np_state, None, self.old_action, self.action,
-                                last_zv=self.last_zv, current_zv=zv)
+            next_cart_p = cart_p + 1 / 60 * cart_v
+            next_block_p = block_p + 1 / 60 * block_v
+            roll_x, pitch_y, yaw_z = euler_from_quaternion(x, y, z, w)
+            p = np.array([roll_x, pitch_y])
+            self.zv = v
 
-        if not self.novelty_indicator:
-            label_prediction = self.agent.predict(feature_vector)
-        else:
-            #label_prediction = self.agent.predict(feature_vector)
-            self.old_action, self.action = self.napping.predict(feature_vector)
-            if 'action' not in self.old_action:
-                self.old_action = {'action':self.old_action}
-            if 'action' not in self.action:
-                self.action = {'action':self.action}
-            self.pre_np_state = feature_vector
-            self.pre_action = self.action
-            self.last_zv = zv
-            label_prediction = self.action
+            past_result = self.trial_result
+            if len(past_result) >= 20:
+                if np.mean(past_result[-10:]) <= 0.7:
+                    self.novelty_indicator = True
 
-        # Use simple agent to predict
+            if self.last_zv is not None:
+                if (abs(self.last_zv - v) > 0.5).any():
+                    self.collision = True
+                else:
+                    self.collision = False
+
+            if self.novelty_indicator and self.last_zv is not None and not self.if_avoid and not self.collision:
+
+                self.napping.update(last_p=self.last_p, last_v=self.last_zv, v=self.zv, last_cart_p=self.last_cart_p,
+                                    last_cart_v=self.last_cart_v, current_cart_p=cart_p, current_cart_v=cart_v,
+                                    current_block_p=block_p, current_block_v=block_v,
+                                    last_block_p=self.last_block_p, last_block_v=self.last_block_v,
+                                    **self.napping_action)
+
+            if not self.novelty_indicator:
+                label_prediction = self.agent.predict(feature_vector)
+            else:
+                # label_prediction = self.agent.predict(feature_vector)
+                avoid_action = self.napping.avoid_incoming_block(current_cart_p=cart_p, current_cart_v=cart_v,
+                                                                 current_pole_p=p, current_pole_v=v,
+                                                                 current_block_p=block_p, current_block_v=block_v)
+
+                self.if_avoid = True if avoid_action is not None else False
+                if self.if_avoid:
+                    self.napping_action = {'agent_action': avoid_action}
+
+                else:
+                    self.napping_action = self.napping.predict(feature_vector)
+
+                if 'adaptation_action' in self.napping_action:
+                    self.action = self.napping_action['adaptation_action']
+                elif 'candidate_action' in self.napping_action:
+                    self.action = self.napping_action['candidate_action']
+                else:
+                    self.action = self.napping_action['agent_action']
+
+                self.pre_state = feature_vector
+                self.pre_action = self.action
+                self.last_zv = self.zv
+                label_prediction = {'action': self.action} if not isinstance(self.action, dict) else self.action
+                self.last_x_dot = x_dot
+                self.last_y_dot = y_dot
+                self.last_p = p
+                self.last_cart_p = cart_p
+                self.last_block_p = block_p
+                self.last_cart_v = cart_v
+                self.last_block_v = block_v
+
+
 
         return label_prediction
 
@@ -414,7 +473,11 @@ class TA2Agent(TA2Logic):
             A JSON-valid dict characterizing the novelty.
         """
         self.log.info('Testing Episode End: performance={}'.format(performance))
-        self.log.info(f'# of adaptation principles: {len(self.napping.adaptation_principle_mapping)}')
+        self.log.info(f'# of adaptation principles: {len(self.napping.adaptation_principles)}')
+
+        # if self.novelty_indicator and self.last_zv is not None:
+        #     self.napping.update(self.pre_state, None, self.old_action, self.action,
+        #                         last_zv=self.last_zv, current_zv=self.zv, additional_model_obs=self.additional)
 
         self.trial_result.append(performance)
 
@@ -423,21 +486,10 @@ class TA2Agent(TA2Logic):
         novelty_threshold = 0.8
         novelty = random.choice(list(range(4)))
         novelty_characterization = dict()
-        # if self.pre_np_state is not None:
-        #     self.if_done[-1] = True
-        #     for i in range(len(self.if_done)):
-        #         obs = self.current_np_states[i]
-        #         next_obs = self.next_np_states[i]
-        #         action = self.actions[i]
-        #         reward = self.rewards[i]
-        #         done = self.if_done[i]
-        #         self.model.replay_buffer.add(obs, next_obs, action, reward, done, [{}])
-        #     if len(self.trial_result[5:]) % 3 == 0:
-        #         tmp_path = "/tmp/sb3_log/"
-        #         # set up logger
-        #         self.model.train(gradient_steps=self.model.replay_buffer.pos // 5, batch_size=64)
-        #         self.napping = self.AdaptationPrinciple(action_space=self.action_space, model=self.model,
-        #                                             eval=self.AdaptationPrinciple.eval)
+
+        # self.napping = self.AdaptationPrinciple(action_space=self.action_space, model=self.agent,
+        #                                         eval=self.AdaptationPrinciple.eval)
+
         return novelty_probability, novelty_threshold, novelty, novelty_characterization
 
     def testing_end(self):
@@ -458,15 +510,16 @@ class TA2Agent(TA2Logic):
         """This is called when the experiment is done.
         """
         self.log.info('Experiment End')
+
         for t in self.performance_recording:
             if len(self.performance_recording[t]) != 0:
                 self.log.critical(
-                f"trial id: {t} pre-novelty performance: {np.average(self.performance_recording[t][:1])} post-novelty performance: {np.average(self.performance_recording[t][1:])}")
-        with open('all_records','w+') as f:
+                    f"trial id: {t} pre-novelty performance: {np.average(self.performance_recording[t][:15])} post-novelty performance: {np.average(self.performance_recording[t][15:])}")
+        with open('all_records_k', 'w+') as f:
             for key, values in self.performance_recording.items():
                 if len(values) != 0:
                     for i, v in enumerate(values):
-            	        f.write(f"{key}, {i}, {v}\n")
+                        f.write(f"{key}, {i}, {v}\n")
         return
 
 

@@ -9,8 +9,8 @@ ADD source/objects /aiq-sail-on/objects/
 
 # Load SOTA.py
 ADD source/sota_util /aiq-sail-on/sota_util/
-ADD source/SOTA-cartpole.py /aiq-sail-on/SOTA-cartpole.py
-ADD source/NAPPING.pyc /aiq-sail-on/NAPPING.pyc
+ADD source/SOTA-cartpole.py /aiq-sail-on/SOTA-cartpole-napping.py
+ADD source/NAPPING.pyc /aiq-sail-on/NAPPING_K.pyc
 
 # Change local dir
 WORKDIR /aiq-sail-on/
