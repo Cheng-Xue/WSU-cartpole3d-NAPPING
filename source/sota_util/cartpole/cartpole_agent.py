@@ -20,44 +20,55 @@ class Simple:
         self.observation_space = np.asarray(range(10))
         self.action_space = range(5)
         self.nb_actions = len(self.action_space)
-        self.init_model()
-        layer_output = self.agent.model.layers[-3].output
-        self.intermediate_model = Model(inputs=self.agent.model.inputs, outputs=layer_output)
+        self.default_session = self.load_model()
+
         return None
 
-    def init_model(self):
-        # Load up model
-        model = Sequential()
-        model.add(Flatten(input_shape=(1,) + self.observation_space.shape))
-        model.add(Dense(512))
-        model.add(Activation('relu'))
-        model.add(Dense(512))
-        model.add(Activation('relu'))
-        model.add(Dense(self.nb_actions))
-        model.add(Activation('linear'))
-        print(model.summary())
+    def load_model(self):
 
         # Finally, we configure and compile our agent. You can use every built-in Keras optimizer and
         # even the metrics!
-        memory = SequentialMemory(limit=50000, window_length=1)
-        policy = BoltzmannQPolicy()
-        dqn = DQNAgent(model=model, nb_actions=self.nb_actions, memory=memory, nb_steps_warmup=10,
-                       target_model_update=1e-2, policy=policy)
-        dqn.compile(Adam(lr=1e-3), metrics=['mae'])
-        dqn.load_weights('sota_util/cartpole/cartpole_weights.h5f')
+
+        with tf.Graph().as_default() as g:
+            config = tf.ConfigProto()
+            sess = tf.Session(graph=g, config=config)
+            with sess.as_default():
+                model = Sequential()
+                model.add(Flatten(input_shape=(1,) + self.observation_space.shape))
+                model.add(Dense(512))
+                model.add(Activation('relu'))
+                model.add(Dense(512))
+                model.add(Activation('relu'))
+                model.add(Dense(self.nb_actions))
+                model.add(Activation('linear'))
+                print(model.summary())
+                memory = SequentialMemory(limit=50000, window_length=1)
+                policy = BoltzmannQPolicy()
+                dqn = DQNAgent(model=model, nb_actions=self.nb_actions, memory=memory, nb_steps_warmup=10,
+                               target_model_update=1e-2, policy=policy)
+                dqn.compile(Adam(lr=1e-3), metrics=['mae'])
+                dqn.load_weights('sota_util/cartpole/cartpole_weights.h5f')
+                dqn.trainable_model._make_train_function()
+
+                dqn.forward(np.random.normal(0,1,(10,)))
+                dqn.target_model._make_predict_function()
+                layer_output = model.layers[-3].output
+
+                self.intermediate_model = Model(inputs=model.inputs, outputs=layer_output)
+                self.intermediate_model.predict(np.random.normal(0,1,(1,1,10)))
 
         # Save to self
         self.agent = dqn
-
-        return None
+        return sess
 
     def predict(self, feature_vector, if_model_obs = False):
         obs = self.format_obs(feature_vector)
-        prediction = self.agent.forward(obs)
-        action_response = self.format_response(prediction)
-        if if_model_obs:
-            model_obs = self.intermediate_model.predict(np.array(obs).astype(np.float32).reshape(1, 1, -1))
-            return action_response, model_obs.squeeze(0)
+        with self.default_session.as_default():
+            prediction = self.agent.forward(obs)
+            action_response = self.format_response(prediction)
+            if if_model_obs:
+                model_obs = self.intermediate_model.predict(np.array(obs).astype(np.float32).reshape(1, 1, -1))
+                return action_response, model_obs.squeeze(0)
         return action_response
 
     def format_obs(self, state):

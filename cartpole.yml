@@ -2,14 +2,12 @@ version: '2'
 
 services:
 
-  # Sample Agent
-  cartpole-sota:
+  cartpole-sota-napping:
     # The volume we mount determines which config files will be available to the services.
     volumes:
-      - ./configs/demo:/aiq-sail-on/config:rw
+      - ./configs/partial:/aiq-sail-on/config:rw
       - ./logs:/aiq-sail-on/logs:rw
     build:
       context: .
       dockerfile: Dockerfile-NAPPING-DQN
-    command: python -u SOTA-cartpole.py --config=config/demo-cartpole.config --printout --logfile=logs/log.txt
-
+    command: python -u SOTA-cartpole-napping.py --config=config/demo-client.config --printout --logfile=logs/log.txt
